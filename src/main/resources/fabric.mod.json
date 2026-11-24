@@ -1,0 +1,33 @@
+{
+	"schemaVersion": 1,
+	"id": "sapling_savior",
+	"version": "${version}",
+	"name": "Sapling Savior",
+	"description": "Saplings that drop when you chop a tree or its leaves decay are planted automatically, spaced out so they never clump. Leaves also decay in seconds once the logs are gone.",
+	"authors": [
+		"Uipg9"
+	],
+	"contact": {
+		"homepage": "https://github.com/Uipg9/sapling-savior"
+	},
+	"license": "CC0-1.0",
+	"icon": "assets/sapling_savior/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"dev.brian.saplingsavior.SaplingSavior"
+		],
+		"fabric-client-gametest": [
+			"dev.brian.saplingsavior.client.SaplingSaviorClientGameTest"
+		]
+	},
+	"mixins": [
+		"sapling_savior.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
