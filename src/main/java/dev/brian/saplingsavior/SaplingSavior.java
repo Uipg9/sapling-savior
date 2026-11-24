@@ -1,10 +1,12 @@
 package dev.brian.saplingsavior;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 
 import net.minecraft.core.BlockPos;
@@ -26,6 +28,9 @@ import org.slf4j.LoggerFactory;
  * Saplings that drop from chopped trees or decaying leaves plant themselves, as long as no other
  * sapling is within {@link SaplingRules#MIN_DISTANCE} blocks. Items that cannot be planted are
  * left alone, so nothing is ever lost.
+ *
+ * <p>Tree-felling mods break logs and leaves in one tick, so "is there a tree here" is decided
+ * when the item spawns. Planting itself is queued and budgeted per tick.
  */
 public class SaplingSavior implements ModInitializer {
 	public static final String MOD_ID = "sapling_savior";
@@ -33,29 +38,31 @@ public class SaplingSavior implements ModInitializer {
 
 	/** How far down an item may "fall" to find ground. */
 	private static final int MAX_FALL = 48;
-	/** A drop only counts when leaves are this close, which excludes chests and the like. */
-	private static final int LEAF_RANGE = 6;
+	/** A drop only counts when leaves or logs are this close, which excludes chests and the like. */
+	private static final int TREE_RANGE = 6;
+	/** Plantings per tick; a felled forest is spread over a few ticks instead of one long one. */
+	private static final int MAX_PER_TICK = 32;
 
-	private final List<Pending> pending = new ArrayList<>();
+	private final PlantQueue<Pending> queue = new PlantQueue<>();
 
 	private record Pending(ServerLevel level, ItemEntity item, BlockPos origin) {}
 
 	@Override
 	public void onInitialize() {
 		ServerEntityEvents.ENTITY_LOAD.register((entity, level) -> {
-			if (entity instanceof ItemEntity item && isFreshLootDrop(item) && saplingBlockOf(item.getItem()) != null) {
-				pending.add(new Pending(level, item, item.blockPosition()));
+			if (entity instanceof ItemEntity item && isFreshLootDrop(item) && saplingBlockOf(item.getItem()) != null
+					&& hasTreeNearby(level, item.blockPosition())) {
+				queue.add(new Pending(level, item, item.blockPosition()), level.getServer().getTickCount());
 			}
 		});
 		// Planting happens at the end of the tick, never inside the loot/decay code that spawned the item.
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
-			if (pending.isEmpty()) return;
-			List<Pending> batch = new ArrayList<>(pending);
-			pending.clear();
-			for (Pending p : batch) {
+			if (queue.isEmpty()) return;
+			for (Pending p : queue.take(server.getTickCount(), MAX_PER_TICK)) {
 				if (!p.item().isRemoved()) tryPlant(p);
 			}
 		});
+		ServerLifecycleEvents.SERVER_STOPPING.register(server -> queue.clear());
 	}
 
 	/** Loot drops are brand new and have no thrower; this skips player-thrown and reloaded items. */
@@ -72,11 +79,12 @@ public class SaplingSavior implements ModInitializer {
 		ServerLevel level = p.level();
 		ItemEntity item = p.item();
 		SaplingBlock sapling = saplingBlockOf(item.getItem());
-		if (sapling == null || !hasLeavesNearby(level, p.origin())) return;
+		if (sapling == null) return;
 
 		BlockPos target = findLanding(level, p.origin());
 		if (target == null) return;
 		BlockState state = sapling.defaultBlockState();
+		// Another mod (a replanter, say) may have planted here first; then the spot is simply not free.
 		if (!level.getBlockState(target).canBeReplaced() || !level.getFluidState(target).isEmpty()
 				|| !state.canSurvive(level, target)) return;
 
@@ -107,26 +115,38 @@ public class SaplingSavior implements ModInitializer {
 		return null;
 	}
 
-	private static boolean hasLeavesNearby(ServerLevel level, BlockPos center) {
-		int r = LEAF_RANGE;
-		for (BlockPos pos : BlockPos.betweenClosed(center.offset(-r, -r, -r), center.offset(r, r, r))) {
-			if (level.getBlockState(pos).is(BlockTags.LEAVES)) return true;
+	/** Leaves or logs within range; returns on the first hit, so real trees are cheap to confirm. */
+	private static boolean hasTreeNearby(ServerLevel level, BlockPos center) {
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		int r = TREE_RANGE;
+		for (int dy = -r; dy <= r; dy++) {
+			for (int dx = -r; dx <= r; dx++) {
+				for (int dz = -r; dz <= r; dz++) {
+					BlockState state = level.getBlockState(pos.set(center.getX() + dx, center.getY() + dy, center.getZ() + dz));
+					if (state.is(BlockTags.LEAVES) || state.is(BlockTags.LOGS)) return true;
+				}
+			}
 		}
 		return false;
 	}
 
 	private static List<SaplingRules.Neighbor> neighborsAround(ServerLevel level, BlockPos center) {
-		List<SaplingRules.Neighbor> found = new ArrayList<>();
+		List<SaplingRules.Neighbor> found = null;
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 		int r = SaplingRules.MIN_DISTANCE - 1;
 		int v = SaplingRules.VERTICAL_RANGE;
-		for (BlockPos pos : BlockPos.betweenClosed(center.offset(-r, -v, -r), center.offset(r, v, r))) {
-			Block block = level.getBlockState(pos).getBlock();
-			if (block instanceof SaplingBlock) {
-				found.add(new SaplingRules.Neighbor(BuiltInRegistries.BLOCK.getKey(block).getPath(),
-						pos.getX() - center.getX(), pos.getY() - center.getY(), pos.getZ() - center.getZ()));
+		for (int dy = -v; dy <= v; dy++) {
+			for (int dx = -r; dx <= r; dx++) {
+				for (int dz = -r; dz <= r; dz++) {
+					Block block = level.getBlockState(pos.set(center.getX() + dx, center.getY() + dy, center.getZ() + dz)).getBlock();
+					if (block instanceof SaplingBlock) {
+						if (found == null) found = new ArrayList<>();
+						found.add(new SaplingRules.Neighbor(BuiltInRegistries.BLOCK.getKey(block).getPath(), dx, dy, dz));
+					}
+				}
 			}
 		}
-		return found;
+		return found == null ? Collections.emptyList() : found;
 	}
 
 	public static Identifier id(String path) {

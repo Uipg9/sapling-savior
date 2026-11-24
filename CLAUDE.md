@@ -10,6 +10,8 @@
 - Fast leaf decay is the one Mixin (`mixin/LeavesBlockMixin`, tail of `LeavesBlock.tick`); pure rules in
   `LeafDecayRules`. `defaultRequire: 1` makes a broken injection fail the boot. The gametest sets
   `random_tick_speed 0` so only the scheduled-tick decay can remove leaves.
+- The tree check (leaves/logs within 6) must stay at ENTITY_LOAD time: tree-felling mods clear leaves in
+  the same tick. Plantings are queued in `PlantQueue` (32 per tick, 100-tick expiry, cleared on server stop).
 - Planting needs no Mixin: `ServerEntityEvents.ENTITY_LOAD` queues fresh sapling `ItemEntity`s, planting happens at
   `END_SERVER_TICK` in `SaplingSavior`. Pure spacing rules live in `SaplingRules` (unit-testable without
   Minecraft bootstrap).

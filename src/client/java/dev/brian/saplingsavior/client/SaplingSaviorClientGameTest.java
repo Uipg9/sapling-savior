@@ -79,7 +79,63 @@ public class SaplingSaviorClientGameTest implements FabricClientGameTest {
 			context.takeScreenshot("planted");
 
 			fastLeafDecay(context, server, x, y + 12, z + 20);
+			fellingModSameTick(context, server, x, y, z);
+			burst(context, server, x, y, z + 30);
 		}
+	}
+
+	/**
+	 * A tree-felling mod drops the sapling and removes every leaf in the same tick. The tree check
+	 * must therefore happen when the item spawns, not at the end of the tick.
+	 */
+	private static void fellingModSameTick(ClientGameTestContext context, TestServerContext server, int x, int y, int z) {
+		BlockPos spot = new BlockPos(x + 11, y, z + 11); // far from every sapling planted earlier
+		server.computeOnServer(s -> {
+			var level = s.overworld();
+			level.addFreshEntity(new ItemEntity(level, spot.getX() + 0.5, y + 3, spot.getZ() + 0.5,
+					new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.OAK_SAPLING)));
+			for (BlockPos pos : BlockPos.betweenClosed(x, y + 5, z, x + 12, y + 5, z + 12)) {
+				level.setBlock(pos, Blocks.AIR.defaultBlockState(), 2);
+			}
+			return 0;
+		});
+		context.waitTicks(10);
+		expect(isBlock(server, spot, Blocks.OAK_SAPLING), "sapling dropped while leaves vanished in the same tick did not plant");
+	}
+
+	/** 200 drops in one tick over a 30x30 area: all handled without errors, spacing still respected. */
+	private static void burst(ClientGameTestContext context, TestServerContext server, int x, int y, int z) {
+		cmd(server, "fill %d %d %d %d %d %d dirt", x, y - 1, z, x + 29, y - 1, z + 29);
+		cmd(server, "fill %d %d %d %d %d %d air", x, y, z, x + 29, y + 8, z + 29);
+		cmd(server, "fill %d %d %d %d %d %d oak_leaves[persistent=true]", x, y + 5, z, x + 29, y + 5, z + 29);
+		context.waitTicks(5);
+		server.computeOnServer(s -> {
+			var level = s.overworld();
+			java.util.Random rnd = new java.util.Random(42);
+			for (int i = 0; i < 200; i++) {
+				level.addFreshEntity(new ItemEntity(level, x + rnd.nextInt(30) + 0.5, y + 3, z + rnd.nextInt(30) + 0.5,
+						new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.OAK_SAPLING)));
+			}
+			return 0;
+		});
+		context.waitTicks(60);
+		int[] result = server.computeOnServer(s -> {
+			java.util.List<BlockPos> saplings = new java.util.ArrayList<>();
+			for (BlockPos pos : BlockPos.betweenClosed(x, y, z, x + 29, y, z + 29)) {
+				if (s.overworld().getBlockState(pos).is(Blocks.OAK_SAPLING)) saplings.add(pos.immutable());
+			}
+			int violations = 0;
+			for (int i = 0; i < saplings.size(); i++) {
+				for (int j = i + 1; j < saplings.size(); j++) {
+					int dx = saplings.get(i).getX() - saplings.get(j).getX();
+					int dz = saplings.get(i).getZ() - saplings.get(j).getZ();
+					if (dx * dx + dz * dz < 16) violations++;
+				}
+			}
+			return new int[] { saplings.size(), violations };
+		});
+		expect(result[0] >= 20, "burst planted too few saplings: " + result[0]);
+		expect(result[1] == 0, "burst produced " + result[1] + " sapling pairs closer than 4 blocks");
 	}
 
 	private static void leaf(TestServerContext server, int x, int y, int z, int distance, boolean persistent) {

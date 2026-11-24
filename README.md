@@ -11,7 +11,11 @@ Saplings that drop when you chop a tree or its leaves decay plant themselves. A 
   vertically). The sapling then stays a normal item, so nothing is lost.
 - **Dark oak and jungle are exempt** from spacing against their own kind, so a 2x2 for the big tree
   can be planted. A cluster is capped at four.
-- Saplings you throw or drop yourself, saplings from chests, and saplings far from any leaves are left alone.
+- Saplings you throw or drop yourself, saplings from chests, and saplings far from any leaves or logs are left alone.
+- **Tree-felling mods** (FallingTree, Tree Harvester, TreeChop and similar) work: whether a drop belongs
+  to a tree is decided the moment the item spawns, so removing all the leaves in the same tick is fine.
+  If another mod replants first, the spot is simply taken and we skip it.
+- A big drop (a whole forest felled at once) is planted at most 32 per tick, so it never causes a lag spike.
 - Mangrove propagules are not handled.
 
 ## Fast leaf decay
